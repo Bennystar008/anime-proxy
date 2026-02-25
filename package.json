@@ -1,0 +1,6 @@
+{
+  "name": "anime-stream-proxy",
+  "version": "1.0.0",
+  "description": "HLS stream proxy for anime-stream.html — forwards requests with Referer: hianime.to",
+  "private": true
+}
