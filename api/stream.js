@@ -1,93 +1,55 @@
-/**
- * /api/stream?url=<encoded-url>
- * Proxies HLS .m3u8 and .ts segments from anime CDNs that require
- * Referer: https://hianime.to/ on every request.
- */
-
-const BLOCKED_HOSTS = [
-  'localhost', '127.0.0.1', '0.0.0.0',
-  '169.254.169.254',
-  'metadata.google.internal',
-];
+// ─────────────────────────────────────────────────────────────────────────────
+// api/stream.js  —  add this file to your aniwatch-api GitHub fork
+// Path in repo: api/stream.js
+// Vercel will serve it at: https://aniwatch-api-tau-ecru.vercel.app/api/stream
+//
+// Usage: GET /api/stream?url=<encoded-cdn-url>
+// Fetches the URL server-side with the correct Referer header and pipes it back
+// with CORS headers so the browser can load it from file:// origin.
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range');
+  res.setHeader('Access-Control-Allow-Headers', '*');
 
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
   const { url } = req.query;
-  if (!url) { res.status(400).json({ error: 'Missing ?url= parameter' }); return; }
+  if (!url) { res.status(400).json({ error: 'Missing url param' }); return; }
 
   let targetUrl;
-  try {
-    targetUrl = decodeURIComponent(url);
-    new URL(targetUrl);
-  } catch {
-    res.status(400).json({ error: 'Invalid URL' });
-    return;
-  }
-
-  const parsedHost = new URL(targetUrl).hostname;
-
-  if (BLOCKED_HOSTS.some(h => parsedHost === h || parsedHost.endsWith('.' + h))) {
-    res.status(403).json({ error: `Host ${parsedHost} is blocked` });
-    return;
-  }
-
-  if (!parsedHost.includes('.') || /^[\d.]+$/.test(parsedHost)) {
-    res.status(403).json({ error: 'Only public domain names are allowed' });
-    return;
-  }
+  try { targetUrl = decodeURIComponent(url); } 
+  catch { res.status(400).json({ error: 'Bad url encoding' }); return; }
 
   try {
     const upstream = await fetch(targetUrl, {
       headers: {
-        'Referer': 'https://hianime.to/',
-        'Origin': 'https://hianime.to',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        ...(req.headers['range'] ? { 'Range': req.headers['range'] } : {}),
+        'Referer':          'https://hianimez.to/',
+        'Origin':           'https://hianimez.to',
+        'User-Agent':       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept':           '*/*',
+        'Accept-Language':  'en-US,en;q=0.9',
+        'Sec-Fetch-Dest':   'empty',
+        'Sec-Fetch-Mode':   'cors',
+        'Sec-Fetch-Site':   'cross-site',
       },
+      redirect: 'follow',
     });
 
-    if (!upstream.ok && upstream.status !== 206) {
-      res.status(upstream.status).json({
-        error: `Upstream ${upstream.status}`,
-        host: parsedHost,
-        url: targetUrl.slice(0, 150),
-      });
+    if (!upstream.ok) {
+      res.status(upstream.status).json({ error: `Upstream ${upstream.status}: ${upstream.statusText}` });
       return;
     }
 
-    const contentType = upstream.headers.get('content-type') || '';
-    const isM3U8 = targetUrl.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('x-mpegURL');
+    const ct = upstream.headers.get('content-type') || 'application/octet-stream';
+    res.setHeader('Content-Type', ct);
+    res.setHeader('Cache-Control', 'public, max-age=60');
 
-    ['content-length', 'content-range', 'accept-ranges'].forEach(h => {
-      const v = upstream.headers.get(h);
-      if (v) res.setHeader(h, v);
-    });
+    const buf = await upstream.arrayBuffer();
+    res.status(200).send(Buffer.from(buf));
 
-    if (isM3U8) {
-      const text = await upstream.text();
-      const base = new URL(targetUrl);
-      const rewritten = text.split('\n').map(line => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) return line;
-        let absoluteUrl;
-        try { absoluteUrl = new URL(trimmed, base).toString(); } catch { return line; }
-        return `/api/stream?url=${encodeURIComponent(absoluteUrl)}`;
-      }).join('\n');
-      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.status(upstream.status).send(rewritten);
-    } else {
-      res.setHeader('Content-Type', contentType || 'application/octet-stream');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      const buffer = await upstream.arrayBuffer();
-      res.status(upstream.status).send(Buffer.from(buffer));
-    }
-  } catch (err) {
-    res.status(502).json({ error: 'Fetch failed', detail: err.message, host: parsedHost });
+  } catch (e) {
+    res.status(502).json({ error: 'Proxy error: ' + e.message });
   }
 }
