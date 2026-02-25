@@ -1,55 +1,69 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// api/stream.js  —  add this file to your aniwatch-api GitHub fork
-// Path in repo: api/stream.js
-// Vercel will serve it at: https://aniwatch-api-tau-ecru.vercel.app/api/stream
-//
-// Usage: GET /api/stream?url=<encoded-cdn-url>
-// Fetches the URL server-side with the correct Referer header and pipes it back
-// with CORS headers so the browser can load it from file:// origin.
-// ─────────────────────────────────────────────────────────────────────────────
+// api/stream.js — add to your aniwatch-api GitHub fork at path: api/stream.js
+// Uses Edge runtime for faster response + no 10s timeout limit on free Vercel.
 
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', '*');
+export const config = { runtime: 'edge' };
 
-  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
+export default async function handler(req) {
+  const { searchParams } = new URL(req.url);
+  const targetUrl = searchParams.get('url');
 
-  const { url } = req.query;
-  if (!url) { res.status(400).json({ error: 'Missing url param' }); return; }
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': '*',
+      },
+    });
+  }
 
-  let targetUrl;
-  try { targetUrl = decodeURIComponent(url); } 
-  catch { res.status(400).json({ error: 'Bad url encoding' }); return; }
+  if (!targetUrl) {
+    return new Response(JSON.stringify({ error: 'Missing url param' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    });
+  }
 
   try {
     const upstream = await fetch(targetUrl, {
+      method: 'GET',
       headers: {
-        'Referer':          'https://hianimez.to/',
-        'Origin':           'https://hianimez.to',
-        'User-Agent':       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept':           '*/*',
-        'Accept-Language':  'en-US,en;q=0.9',
-        'Sec-Fetch-Dest':   'empty',
-        'Sec-Fetch-Mode':   'cors',
-        'Sec-Fetch-Site':   'cross-site',
+        'Referer': 'https://hianimez.to/',
+        'Origin': 'https://hianimez.to',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'cross-site',
       },
       redirect: 'follow',
     });
 
     if (!upstream.ok) {
-      res.status(upstream.status).json({ error: `Upstream ${upstream.status}: ${upstream.statusText}` });
-      return;
+      return new Response(JSON.stringify({ error: `Upstream ${upstream.status}` }), {
+        status: upstream.status,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      });
     }
 
-    const ct = upstream.headers.get('content-type') || 'application/octet-stream';
-    res.setHeader('Content-Type', ct);
-    res.setHeader('Cache-Control', 'public, max-age=60');
+    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    const body = await upstream.arrayBuffer();
 
-    const buf = await upstream.arrayBuffer();
-    res.status(200).send(Buffer.from(buf));
-
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Cache-Control': 'public, max-age=30',
+      },
+    });
   } catch (e) {
-    res.status(502).json({ error: 'Proxy error: ' + e.message });
+    return new Response(JSON.stringify({ error: e.message }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    });
   }
 }
